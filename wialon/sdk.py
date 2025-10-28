@@ -1,97 +1,29 @@
-"""SDK classes"""
-
 import json
 import logging
-import sys
-from typing import Any, cast
+from collections.abc import Callable
+from typing import Any, Self, cast
 
 import requests
+from pydantic import BaseModel, Field
 
 from wialon.exceptions import SdkException, WialonError
-
-if sys.version_info >= (3, 9):
-  from collections.abc import Callable
-else:
-  from typing import Callable
-
-if sys.version_info >= (3, 11):
-  from typing import Self
-else:
-  from typing_extensions import Self
 
 log = logging.getLogger('wialon.sdk')
 
 
-class WialonSdk:
+class WialonSdk(BaseModel):
   """Sdk handler"""
 
-  _scheme: str
-  _host: str
-  _port: int
-  _session_id: str
-  _default_params: dict[str, Any]
-  _user_id: str
-
-  def __init__(
-    self: Self,
-    scheme: str = 'https',
-    host: str = 'hst-api.wialon.com',
-    port: int = 0,
-    session_id: str = '',
-    extra_params: dict[str, Any] | None = None,
-  ) -> None:
-    """
-    Wialon SDK
-    :param scheme: defines the scheme to use, default is https
-    :type scheme: str
-    :param host: defines the host to use, default is hst-api.wialon
-    :type host: str
-    :param port: defines the port to use, default is 0. If the port
-                 is different to 0, the SDK will use the scheme://host:port to perform any request,
-                 otherwise, the SDK will use https://host to perform any request
-    :type port: int
-    :param session_id: defines the session_id to use, default is empty string
-    :type session_id: str
-    :param extra_params: defines the extra_params to use, default is None
-    :type extra_params: dict[str, Any] | None
-    """
-
-    if not isinstance(scheme, str):
-      raise SdkException(message='Invalid scheme, must be string')
-    self._scheme = scheme
-
-    if not isinstance(host, str):
-      raise SdkException(message='Invalid host, must be string')
-    self._host = host
-
-    if not isinstance(port, int):
-      raise SdkException(message='Invalid port, must be integer')
-    self._port = port
-
-    if not isinstance(session_id, str):
-      raise SdkException(message='Invalid session_id, must be string')
-    self._session_id = session_id
-
-    self._default_params = {}
-
-    if extra_params is not None:
-      if not isinstance(extra_params, dict):
-        raise SdkException(message='Invalid extra_params, must be dict')
-      self._default_params.update(extra_params)
-
-    self._user_id = ''
+  url: str = Field('https://hst-api.wialon.com', description='Base URL to perform any request')
+  session_id: str = Field('', description='Wialon session ID, keep empty to login later')
+  default_params: dict[str, Any] = Field(default_factory=dict, description='Base parameters to use')
+  user_id: str = Field('', description='Wialon user ID, filled after login')
 
   @property
   def base_url(self: Self) -> str:
-    """Get the base URL to perform any request"""
-    if self._port > 0:
-      url = f'{self._scheme}://{self._host}:{self._port}'
-    else:
-      url = f'{self._scheme}://{self._host}'
+    return f'{self.url}/wialon/ajax.html?'
 
-    return f'{url}/wialon/ajax.html?'
-
-  def call(self: Self, method: str, args: dict[str, Any] | list[Any]) -> dict[str, Any] | list[Any]:
+  def call(self: Self, *, method: str, args: dict[str, Any] | list[Any]) -> dict[str, Any] | list[Any]:
     """
     Call method
     Allows to call any method in the Remtoe API using the following rule:
@@ -99,17 +31,13 @@ class WialonSdk:
     method in Python, for example:
     core/search_items -> core_search_items
 
-    Arguments:
-      - method : defines the method to call
-      - args : defines the arguments to use, must be a dict, in case if the method requires a list,
-               the default_params will be ignored
+    :param method: defines the method to call
+    :param args: defines the arguments to use, must be a dict, in case if the method requires a list,
+                 the default_params will be ignored
 
-    Returns:
-      - dict : the response from the server
-
-    Raises:
-      - SdkException : if any error occurs
-      - WialonError : if the server returns an error
+    :return: the response from the server, must be a dict or a list
+    :raises SdkException: if any error occurs
+    :raises WialonError: if the server returns an error
     """
     svc = None
 
@@ -118,10 +46,7 @@ class WialonSdk:
     else:
       svc = str(method).replace('_', '/', 1)
 
-    parameters = {
-      'svc': svc,
-      'sid': self._session_id,
-    }
+    parameters = {'svc': svc, 'sid': self._session_id}
 
     if isinstance(args, list):
       try:
@@ -131,7 +56,7 @@ class WialonSdk:
     else:
       try:
         arguments: dict[str, Any] = {}
-        arguments.update(self._default_params)
+        arguments.update(self.default_params)
         arguments.update(args)
         parameters['params'] = json.dumps(arguments)
       except Exception as e:
@@ -178,13 +103,12 @@ class WialonSdk:
     :type token: str
 
     :return: the response from the server, must be a dict
-    :rtype: dict[str, Any]
     """
-    result = cast(dict[str, Any], self.token_login({'token': token}))
-
+    result = self.token_login({'token': token})
+    if not isinstance(result, dict):
+      raise SdkException('Internal error: invalid response type')
     self._user_id = result['user']['id']
     self._session_id = result['eid']
-
     return result
 
   def logout(self: Self) -> dict[str, Any]:
@@ -193,9 +117,11 @@ class WialonSdk:
     `user_id` properties to ensure that the session is no longer valid.
 
     :return: the response from the server, must be a dict
-    :rtype: dict[str, Any]
     """
-    return cast(dict[str, Any], self.core_logout())
+    result = self.core_logout()
+    if not isinstance(result, dict):
+      raise SdkException('Internal error: invalid response type')
+    return result
 
   def reverse_geocoding(self: Self, latitude: float, longitude: float, flags: int = 1255211008) -> str:
     """
@@ -204,11 +130,8 @@ class WialonSdk:
     !Note: Your Wialon session will use the default geocoding service, that may be Google services or Wialon services.
 
     :param latitude: Latitude of the location to reverse geocode
-    :type latitude: float
     :param longitude: Longitude of the location to reverse geocode
-    :type longitude: float
     :param flags: Flags for the reverse geocoding request, default is 125521
-    :type flags: int
     """
 
     coordinates = json.dumps({'lon': longitude, 'lat': latitude})
@@ -239,7 +162,7 @@ class WialonSdk:
       if len(kwargs) > 0:
         arguments.update(kwargs)
 
-      return self.call(name, arguments)
+      return self.call(method=name, args=arguments)
 
     return method
 

@@ -9,7 +9,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/goldenm-software/python-builder:uv-3.13
+      image: ghcr.io/layrz-software/python-builder:uv-3.13
       options: --user root
       credentials:
         username: ${{ github.repository_owner }}
